@@ -24,6 +24,7 @@ const botOptions = {
 };
 
 let bot;
+let antiAfkInterval;
 
 function createBot() {
   bot = mineflayer.createBot(botOptions);
@@ -39,6 +40,7 @@ function createBot() {
 
   bot.on('end', (reason) => {
     console.log(`Bot disconnected: ${reason}`);
+    stopAntiAfk();
     console.log('Reconnecting in 10 seconds...');
     setTimeout(createBot, 10000);
   });
@@ -53,8 +55,10 @@ function createBot() {
 }
 
 function startAntiAfk() {
+  if (antiAfkInterval) clearInterval(antiAfkInterval);
+
   // Simple Anti-AFK: Randomly look around and jump every few seconds
-  setInterval(() => {
+  antiAfkInterval = setInterval(() => {
     if (!bot || !bot.entity) return;
 
     // Random yaw and pitch
@@ -77,5 +81,24 @@ function startAntiAfk() {
   }, 5000 + Math.random() * 5000); // Every 5-10 seconds
 }
 
+function stopAntiAfk() {
+    if (antiAfkInterval) {
+        clearInterval(antiAfkInterval);
+        antiAfkInterval = null;
+    }
+}
+
 // Start the bot
 createBot();
+
+// --- Keep Alive (Self Ping) ---
+// Render free tier sleeps after 15 mins of inactivity. 
+// This tries to keep it awake, but an external uptime monitor is better.
+const http = require('http');
+setInterval(() => {
+    http.get(`http://localhost:${PORT}`, (res) => {
+        console.log('Keep-alive ping sent. Status:', res.statusCode);
+    }).on('error', (err) => {
+        console.error('Keep-alive ping failed:', err.message);
+    });
+}, 5 * 60 * 1000); // Ping every 5 minutes
