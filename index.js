@@ -25,6 +25,7 @@ const botOptions = {
 
 let bot;
 let antiAfkInterval;
+let scheduledReconnectTimeout;
 
 function createBot() {
   bot = mineflayer.createBot(botOptions);
@@ -32,20 +33,49 @@ function createBot() {
   bot.on('login', () => {
     console.log(`Bot logged in as ${bot.username}`);
     startAntiAfk();
+
+    // Schedule a disconnect after 1 hour (3600000 ms)
+    if (scheduledReconnectTimeout) clearTimeout(scheduledReconnectTimeout);
+    scheduledReconnectTimeout = setTimeout(() => {
+        console.log('Planned hourly disconnect...');
+        bot.end();
+    }, 3600000);
   });
 
   bot.on('error', (err) => {
-    console.log(`Bot error: ${err}`);
-    if (err.code === 'ECONNRESET') {
-        bot.end();
+    console.log('Bot error encountered:', err);
+    if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') {
+        console.log(`Connection failed: ${err.code}. Attempting to reconnect...`);
+        // If the socket is reset/refused, 'end' might not fire automatically in all cases.
+        // We ensure 'bot.end()' is called to trigger the 'end' event logic.
+        // But if end() throws or doesn't work, we might need a fallback.
+        try {
+            bot.end(); 
+        } catch (e) {
+            console.log('Error calling bot.end(), manually triggering reconnect logic:', e);
+            // If bot.end() fails, we manually call the cleanup and reconnect logic
+            // providing we haven't already scheduled one.
+            bot.emit('end', 'error_trigger'); 
+        }
     }
   });
 
   bot.on('end', (reason) => {
     console.log(`Bot disconnected: ${reason}`);
     stopAntiAfk();
-    console.log('Reconnecting in 10 seconds...');
-    setTimeout(createBot, 10000);
+    if (scheduledReconnectTimeout) {
+        clearTimeout(scheduledReconnectTimeout);
+        scheduledReconnectTimeout = null;
+    }
+    
+    // Prevent multiple reconnection timers
+    if (!bot._reconnectTimer) {
+        console.log('Reconnecting in 10 seconds...');
+        bot._reconnectTimer = setTimeout(() => {
+            bot._reconnectTimer = null;
+            createBot();
+        }, 10000);
+    }
   });
   
   bot.on('kicked', (reason) => {
@@ -60,28 +90,45 @@ function createBot() {
 function startAntiAfk() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
 
-  // Simple Anti-AFK: Randomly look around and jump every few seconds
+  // Improved Anti-AFK: Move, Sneak, Look, Jump to simulate activity
   antiAfkInterval = setInterval(() => {
     if (!bot || !bot.entity) return;
 
-    // Random yaw and pitch
+    // Always look around slightly
     const yaw = Math.random() * Math.PI - (0.5 * Math.PI);
     const pitch = Math.random() * Math.PI - (0.5 * Math.PI);
-    
     bot.look(yaw, pitch);
+
+    const action = Math.floor(Math.random() * 4);
     
-    // Occasionally jump
-    if (Math.random() < 0.3) {
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.setControlState('jump', false), 500);
+    switch (action) {
+        case 0: // Jump
+            bot.setControlState('jump', true);
+            setTimeout(() => bot.setControlState('jump', false), 800);
+            break;
+        case 1: // Sneak
+            bot.setControlState('sneak', true);
+            setTimeout(() => bot.setControlState('sneak', false), 1500);
+            break;
+        case 2: // Swing Arm
+            bot.swingArm();
+            break;
+        case 3: // Walk sequence (Forward then Back)
+            bot.setControlState('forward', true);
+            setTimeout(() => {
+                bot.setControlState('forward', false);
+                // Wait a bit then move back
+                setTimeout(() => {
+                    bot.setControlState('back', true);
+                    setTimeout(() => bot.setControlState('back', false), 600);
+                }, 200);
+            }, 600);
+            break;
     }
     
-    // Swing arm
-    bot.swingArm();
-    
-    console.log('Anti-AFK action performed');
+    console.log(`Anti-AFK action ${action} performed`);
 
-  }, 5000 + Math.random() * 5000); // Every 5-10 seconds
+  }, 10000 + Math.random() * 10000); // Every 10-20 seconds
 }
 
 function stopAntiAfk() {
@@ -89,6 +136,7 @@ function stopAntiAfk() {
         clearInterval(antiAfkInterval);
         antiAfkInterval = null;
     }
+    if (bot) bot.clearControlStates();
 }
 
 // Start the bot
